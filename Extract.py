@@ -5,11 +5,16 @@ import os
 import argparse
 import errno
 import csv
+import traceback
+import httplib			
+import socket
 from collections import defaultdict
 
 time_periods = ["1961-1969","1969-1977"]
 pdburl = "https://www.cia.gov/library/readingroom/collection/presidents-daily-brief-{0}?page="
 dir_path = os.path.dirname(os.path.realpath(__file__))
+timeout = 10
+socket.setdefaulttimeout(timeout)
 
 def cli():
     formatter = argparse.ArgumentDefaultsHelpFormatter
@@ -45,22 +50,22 @@ def download_docs(pdbdocs):
 	
 	download_dir = dir_path+"/data/"
 	meta_data_file = dir_path+"/data/metadata.csv"
-	pdb_keys = ['id','name','page_count','link','type','size','time-period']
+	pdb_keys = ['id','name','page_count','link','type','size','time_period']
 	if len(pdbdocs) == 0:
 		print "No files to download"
 		return
 
 	with open(meta_data_file, 'w') as csvfile:
-		meta_data_writer = csv.writer(csvfile, delimiter=',')
-		meta_data_writer.writerow(pdb_keys)
-
+		writer = csv.DictWriter(csvfile, fieldnames=pdb_keys,quotechar="'", quoting=csv.QUOTE_MINIMAL, doublequote = True)
+		writer.writeheader()
+			
 
 	print "Downloading docs to {0}".format(download_dir)
 	
 	report = {}
 	count  = 0
 	for pdb in pdbdocs:
-		download_path = download_dir + "/DOC_{0}.pdf".format(pdb['id'])
+		download_path = download_dir + "DOC_{0}.pdf".format(pdb['id'])
 		if os.path.exists(download_path):
 			print "{0} file exists. Skipping".format(pdb['id'])
 			continue
@@ -71,12 +76,13 @@ def download_docs(pdbdocs):
 			if exc.errno != errno.EEXIST:
 				raise
 
+		count+=1
+
 		#Writing into meta data file
 		with open(meta_data_file, 'a') as csvfile:
-			meta_data_writer = csv.writer(csvfile, delimiter=',')
-			pdb_row = [pdb[key] for key in pdb_keys]
-			meta_data_writer.writerow(pdb_row)
-
+			writer = csv.DictWriter(csvfile, fieldnames=pdb_keys, quotechar="'", quoting=csv.QUOTE_MINIMAL, doublequote = True)
+			writer.writerow(pdb)
+			
 		docfile = urllib.URLopener()
 		docfile.retrieve(pdb['link'],download_path)
 		
@@ -87,7 +93,8 @@ def download_docs(pdbdocs):
 
 		report['time_period']['count'] = report['time_period']['count'] + 1
 		report['time_period']['size'] += pdb['size']
-		print "{0} files downloaded".format(count)
+		if count%20 == 0:
+			print "{0} files downloaded".format(count)
 	print_report(report)
 	
 def get_files():
@@ -95,14 +102,24 @@ def get_files():
 	pdbdocs = list()
 	
 	for time_period in time_periods:
-		print "Getting files for {0} time period".format(time_period)
+		print "Getting pages for {0} time period".format(time_period)
 		page_count = 1
 		while True:
+			if testing and page_count > 2:
+				break
 			if page_count % 20 == 0 :
 				print "Getting page {0}".format(page_count)
-			#Set this back to True only if atleast one document is found in the current page
-			html_page = urllib2.urlopen(pdburl.format(time_period)+str(page_count))
-
+			try :
+				html_page = urllib2.urlopen(pdburl.format(time_period)+str(page_count),timeout=5)
+			except urllib2.HTTPError, e:
+				print 'HTTPError = ' + str(e.code)
+			except urllib2.URLError, e:
+				print 'URLError = ' + str(e.reason)
+			except httplib.HTTPException, e:
+				print 'HTTPException'
+			except Exception:
+				print 'Generic exception: ' + traceback.format_exc()	
+			
 			soup = BeautifulSoup(html_page)
 
 			content_div = soup.find('div',{'class':'view-content'})
